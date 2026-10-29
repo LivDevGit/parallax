@@ -27,11 +27,13 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
@@ -93,8 +95,8 @@ fun HomeScreen(
     }
     val reveal by animateFloatAsState(if (appsShown) 1f else 0f, tween(450), label = "reveal")
 
-    // The blurred version of whatever the Top Shelf shows, for the glass widgets to show through.
-    var glass by remember { mutableStateOf<ImageBitmap?>(null) }
+    // The resting home screen's background, which also shows through the glass widgets.
+    val gradient = rememberAnimatedGradient(running = !appsShown)
     val now by rememberNow()
     val weather by rememberWeather()
     val match by rememberBarcelonaMatch()
@@ -158,7 +160,28 @@ fun HomeScreen(
             },
     ) {
         val shelfApp = apps.getOrNull(focusedIndex.coerceAtMost(apps.lastIndex))
-        TopShelf(app = shelfApp, onGlass = { glass = it }, textAlpha = { reveal }, modifier = Modifier.fillMaxSize())
+        // The gradient rests underneath; the Top Shelf fades in over it with the apps. Each layer is skipped
+        // entirely when fully hidden, so only one full-screen background is ever drawn at rest.
+        Box(
+            Modifier
+                .fillMaxSize()
+                .graphicsLayer { alpha = if (reveal < 1f) 1f else 0f }
+                .drawBehind {
+                    gradient.frame
+                    drawImage(
+                        image = gradient.image,
+                        srcSize = IntSize(gradient.image.width, gradient.image.height),
+                        dstSize = IntSize(size.width.toInt(), size.height.toInt()),
+                        filterQuality = FilterQuality.Low,
+                    )
+                },
+        )
+        TopShelf(
+            app = shelfApp,
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer { alpha = reveal; compositingStrategy = CompositingStrategy.ModulateAlpha },
+        )
         val screen = with(LocalDensity.current) { IntSize(maxWidth.roundToPx(), maxHeight.roundToPx()) }
 
         LazyRow(
@@ -197,15 +220,15 @@ fun HomeScreen(
             horizontalArrangement = Arrangement.spacedBy(24.dp),
             verticalAlignment = Alignment.Bottom,
             modifier = Modifier
-                .align(Alignment.BottomStart)
-                .padding(start = 72.dp, bottom = 48.dp)
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 48.dp)
                 .graphicsLayer {
                     alpha = 1f - reveal
                     compositingStrategy = CompositingStrategy.ModulateAlpha
                 },
         ) {
-            ClockWidget(now, weather, glass, screen, Modifier.width(300.dp).height(156.dp))
-            BarcelonaWidget(match, glass, screen, Modifier.width(400.dp).height(156.dp))
+            ClockWidget(now, weather, gradient, screen, Modifier.width(300.dp).height(156.dp))
+            BarcelonaWidget(match, gradient, screen, Modifier.width(400.dp).height(156.dp))
         }
 
         Column(
@@ -247,28 +270,12 @@ private sealed interface ShelfContent {
     data class Ambient(val app: AppInfo) : ShelfContent
 
     /** A popular show or film from the focused streaming service. */
-    data class Feature(val app: AppInfo, val item: ShelfItem, val backdrop: Backdrop) : ShelfContent
+    data class Feature(val app: AppInfo, val item: ShelfItem, val image: ImageBitmap) : ShelfContent
 }
 
 @Composable
-private fun TopShelf(
-    app: AppInfo?,
-    onGlass: (ImageBitmap?) -> Unit,
-    // The app name and title describe the focused app, so they only show while the apps do.
-    textAlpha: () -> Float,
-    modifier: Modifier = Modifier,
-) {
+private fun TopShelf(app: AppInfo?, modifier: Modifier = Modifier) {
     var content by remember { mutableStateOf<ShelfContent?>(null) }
-
-    LaunchedEffect(content) {
-        onGlass(
-            when (val shown = content) {
-                is ShelfContent.Ambient -> shown.app.backdrop
-                is ShelfContent.Feature -> shown.backdrop.blurred
-                null -> null
-            },
-        )
-    }
 
     LaunchedEffect(app?.id) {
         if (app == null) return@LaunchedEffect
@@ -301,6 +308,9 @@ private fun TopShelf(
             Tmdb.advance(app.id)
             launch { Tmdb.preload(app.id, items) }
             delay(9_000)
+            // No frames are drawn while another app is in front, so this pauses the rotation (and its
+            // downloads) until the launcher is back on screen.
+            withFrameNanos { }
         }
     }
 
@@ -323,7 +333,7 @@ private fun TopShelf(
                     )
                 }
                 is ShelfContent.Feature -> Image(
-                    bitmap = shown.backdrop.image,
+                    bitmap = shown.image,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
@@ -337,14 +347,12 @@ private fun TopShelf(
             contentScale = ContentScale.FillBounds,
             modifier = Modifier.fillMaxSize(),
         )
-        Box(Modifier.graphicsLayer { alpha = textAlpha(); compositingStrategy = CompositingStrategy.ModulateAlpha }) {
         LightCrossfade(content) { shown ->
             when (shown) {
                 is ShelfContent.Ambient -> AmbientText(shown.app)
                 is ShelfContent.Feature -> FeatureText(shown)
                 null -> Unit
             }
-        }
         }
     }
 }

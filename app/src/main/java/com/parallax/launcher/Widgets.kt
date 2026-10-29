@@ -1,8 +1,6 @@
 package com.parallax.launcher
 
 import android.text.format.DateFormat
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -21,7 +19,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -35,7 +32,6 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
-import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
@@ -61,31 +57,18 @@ private val GlassEdge = Brush.verticalGradient(listOf(Color.White.copy(alpha = 0
 private val Romania: ZoneId = ZoneId.of("Europe/Bucharest")
 
 /**
- * A frosted-glass panel. Real backdrop blur is too heavy for this TV's GPU, so the panel draws the screen's
- * pre-blurred backdrop itself, aligned to where it sits on screen, then the same shading the Top Shelf uses,
- * a milky tint and a bright edge.
+ * A frosted-glass panel. Real backdrop blur is too heavy for this TV's GPU, but the resting home screen's
+ * background is already a soft gradient, so the panel draws that same gradient itself, aligned to where
+ * it sits on screen, then a milky tint and a bright edge.
  */
 @Composable
 fun GlassCard(
-    backdrop: ImageBitmap?,
+    background: AnimatedGradient,
     screen: IntSize,
     modifier: Modifier = Modifier,
     content: @Composable BoxScope.() -> Unit,
 ) {
     var origin by remember { mutableStateOf(IntOffset.Zero) }
-    // Crossfade with the Top Shelf when the backdrop changes.
-    var shown by remember { mutableStateOf(backdrop) }
-    var previous by remember { mutableStateOf<ImageBitmap?>(null) }
-    val progress = remember { Animatable(1f) }
-    LaunchedEffect(backdrop) {
-        if (backdrop === shown) return@LaunchedEffect
-        previous = shown
-        shown = backdrop
-        progress.snapTo(0f)
-        progress.animateTo(1f, tween(350))
-        previous = null
-    }
-
     Box(
         modifier
             .onGloballyPositioned { coordinates ->
@@ -94,19 +77,15 @@ fun GlassCard(
             }
             .clip(GlassShape)
             .drawBehind {
-                val offset = IntOffset(-origin.x, -origin.y)
-                fun layer(image: ImageBitmap, alpha: Float = 1f) = drawImage(
-                    image = image,
-                    srcSize = IntSize(image.width, image.height),
-                    dstOffset = offset,
+                // Reading the frame redraws the panel whenever the gradient moves.
+                background.frame
+                drawImage(
+                    image = background.image,
+                    srcSize = IntSize(background.image.width, background.image.height),
+                    dstOffset = IntOffset(-origin.x, -origin.y),
                     dstSize = screen,
-                    alpha = alpha,
                     filterQuality = FilterQuality.Low,
                 )
-                drawRect(Color(0xFF0A0A0E))
-                previous?.let { layer(it) }
-                shown?.let { layer(it, if (previous != null) progress.value else 1f) }
-                layer(Precomputed.shelfOverlay)
                 drawRect(Color.White.copy(alpha = 0.10f))
                 drawRect(Brush.verticalGradient(0f to Color.White.copy(alpha = 0.12f), 0.6f to Color.Transparent))
             }
@@ -145,11 +124,11 @@ fun rememberBarcelonaMatch(): State<Match?> = produceState<Match?>(null) {
 }
 
 @Composable
-fun ClockWidget(now: Date, weather: WeatherInfo?, backdrop: ImageBitmap?, screen: IntSize, modifier: Modifier = Modifier) {
+fun ClockWidget(now: Date, weather: WeatherInfo?, background: AnimatedGradient, screen: IntSize, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val time = remember { DateFormat.getTimeFormat(context) }
     val date = remember { DateTimeFormatter.ofPattern("EEEE, d MMMM", Locale.ENGLISH) }
-    GlassCard(backdrop, screen, modifier) {
+    GlassCard(background, screen, modifier) {
         Column {
             BasicText(
                 text = time.format(now),
@@ -171,8 +150,8 @@ fun ClockWidget(now: Date, weather: WeatherInfo?, backdrop: ImageBitmap?, screen
 }
 
 @Composable
-fun BarcelonaWidget(match: Match?, backdrop: ImageBitmap?, screen: IntSize, modifier: Modifier = Modifier) {
-    GlassCard(backdrop, screen, modifier) {
+fun BarcelonaWidget(match: Match?, background: AnimatedGradient, screen: IntSize, modifier: Modifier = Modifier) {
+    GlassCard(background, screen, modifier) {
         if (match == null) {
             BasicText(
                 text = "FC Barcelona\nLooking for the next match…",

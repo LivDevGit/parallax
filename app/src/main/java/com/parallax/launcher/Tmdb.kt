@@ -13,9 +13,6 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
-/** A Top Shelf image, plus a small blurred copy that glass widgets show through. */
-class Backdrop(val image: ImageBitmap, val blurred: ImageBitmap)
-
 /** A show or film to feature in the Top Shelf while its streaming app is focused. */
 data class ShelfItem(
     val title: String,
@@ -63,7 +60,7 @@ object Tmdb {
     // Where each service's rotation is up to, so coming back to an app shows the next title rather than the first.
     private val cursors = mutableMapOf<String, Int>()
     // Room for the current and next backdrop of every service (~1.8 MB each at 1280x720 RGB_565).
-    private val backdrops = LruCache<String, Backdrop>(16)
+    private val backdrops = LruCache<String, ImageBitmap>(16)
 
     fun supports(packageName: String): Boolean = token.isNotBlank() && packageName in providersByPackage
 
@@ -94,7 +91,7 @@ object Tmdb {
 
     fun cachedItems(packageName: String): List<ShelfItem>? = itemsByPackage[packageName]
 
-    fun cachedBackdrop(url: String): Backdrop? = backdrops.get(url)
+    fun cachedBackdrop(url: String): ImageBitmap? = backdrops.get(url)
 
     /** Downloads the backdrops this service will show next, so focusing it is instant. */
     suspend fun preload(packageName: String, items: List<ShelfItem>) {
@@ -109,7 +106,7 @@ object Tmdb {
         cursors[packageName] = (cursors[packageName] ?: 0) + 1
     }
 
-    suspend fun backdrop(url: String): Backdrop? {
+    suspend fun backdrop(url: String): ImageBitmap? {
         backdrops.get(url)?.let { return it }
         return withContext(Dispatchers.IO) {
             runCatching {
@@ -119,13 +116,10 @@ object Tmdb {
                 try {
                     // RGB_565 halves memory; backdrops have no transparency and sit under a gradient anyway.
                     val options = BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.RGB_565 }
-                    BitmapFactory.decodeStream(connection.inputStream, null, options)?.let { image ->
-                        val blurred = Precomputed.blur(Bitmap.createScaledBitmap(image, 96, 54, true), radius = 3)
+                    BitmapFactory.decodeStream(connection.inputStream, null, options)
                         // Upload to the GPU in the background now, rather than mid-animation on first draw.
-                        image.prepareToDraw()
-                        blurred.prepareToDraw()
-                        Backdrop(image.asImageBitmap(), blurred.asImageBitmap())
-                    }
+                        ?.also { it.prepareToDraw() }
+                        ?.asImageBitmap()
                 } finally {
                     connection.disconnect()
                 }
