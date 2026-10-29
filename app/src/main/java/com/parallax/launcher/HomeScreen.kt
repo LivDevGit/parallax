@@ -78,7 +78,8 @@ fun HomeScreen(
     LaunchedEffect(apps.map { it.id }) {
         for (app in apps) {
             if (!Tmdb.supports(app.id)) continue
-            Tmdb.itemsFor(app.id).firstOrNull()?.let { Tmdb.backdrop(it.backdropUrl) }
+            val items = Tmdb.itemsFor(app.id)
+            if (items.isNotEmpty()) Tmdb.backdrop(Tmdb.current(app.id, items).backdropUrl)
         }
     }
 
@@ -212,17 +213,16 @@ private fun TopShelf(app: AppInfo?, modifier: Modifier = Modifier) {
         }
         val items = Tmdb.itemsFor(app.id)
         if (items.isEmpty()) return@LaunchedEffect
-        var index = 0
         while (true) {
-            val item = items[index % items.size]
+            val item = Tmdb.current(app.id, items)
             Tmdb.backdrop(item.backdropUrl)?.let {
                 fallback.cancel()
                 content = ShelfContent.Feature(app, item, it)
             }
-            // Warm the next backdrop while this one is on screen.
-            launch { Tmdb.backdrop(items[(index + 1) % items.size].backdropUrl) }
+            // Move on now, so leaving and coming back shows a different title; warm its backdrop meanwhile.
+            Tmdb.advance(app.id)
+            launch { Tmdb.backdrop(Tmdb.current(app.id, items).backdropUrl) }
             delay(9_000)
-            index++
         }
     }
 

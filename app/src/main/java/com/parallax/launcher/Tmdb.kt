@@ -31,7 +31,10 @@ object Tmdb {
     private const val API = "https://api.themoviedb.org/3"
     private const val IMAGES = "https://image.tmdb.org/t/p/w1280"
     private const val REGION = "RO"
-    private const val MAX_ITEMS = 8
+    // A wide pool, shuffled, so the shelf rarely repeats; refreshed a few times a day as popularity shifts.
+    private const val MAX_ITEMS = 30
+    private const val PAGES = 2
+    private const val REFRESH_MS = 6 * 60 * 60 * 1000L
 
     /**
      * How to find a service on TMDB: by provider name in the user's region (several names cover rebrands),
@@ -53,6 +56,9 @@ object Tmdb {
     private val mutex = Mutex()
     private var providerIds: Map<String, Int>? = null
     private val itemsByPackage = mutableMapOf<String, List<ShelfItem>>()
+    private val loadedAt = mutableMapOf<String, Long>()
+    // Where each service's rotation is up to, so coming back to an app shows the next title rather than the first.
+    private val cursors = mutableMapOf<String, Int>()
     private val backdrops = LruCache<String, ImageBitmap>(10)
 
     fun supports(packageName: String): Boolean = token.isNotBlank() && packageName in providersByPackage
@@ -62,7 +68,9 @@ object Tmdb {
     suspend fun itemsFor(packageName: String): List<ShelfItem> = withContext(Dispatchers.IO) {
         if (!supports(packageName)) return@withContext emptyList()
         mutex.withLock {
-            itemsByPackage[packageName]?.let { return@withLock it }
+            val cached = itemsByPackage[packageName]
+            val fresh = System.currentTimeMillis() - (loadedAt[packageName] ?: 0) < REFRESH_MS
+            if (cached != null && fresh) return@withLock cached
             // Failures aren't cached, so the next focus tries again (e.g. the network wasn't up yet).
             runCatching {
                 val provider = providersByPackage.getValue(packageName)
@@ -70,9 +78,21 @@ object Tmdb {
                     val ids = providerIds ?: loadProviderIds().also { providerIds = it }
                     provider.names.firstNotNullOfOrNull { ids[it.lowercase()] }
                 } ?: return@runCatching emptyList()
-                interleave(discover("tv", id, provider.region), discover("movie", id, provider.region)).take(MAX_ITEMS)
-            }.getOrNull()?.also { itemsByPackage[packageName] = it } ?: emptyList()
+                val shows = (1..PAGES).flatMap { discover("tv", id, provider.region, it) }
+                val movies = (1..PAGES).flatMap { discover("movie", id, provider.region, it) }
+                interleave(shows, movies).distinctBy { it.backdropUrl }.take(MAX_ITEMS).shuffled()
+            }.getOrNull()?.takeIf { it.isNotEmpty() }?.also {
+                itemsByPackage[packageName] = it
+                loadedAt[packageName] = System.currentTimeMillis()
+            } ?: cached ?: emptyList()
         }
+    }
+
+    /** The title this service's Top Shelf should show next. */
+    fun current(packageName: String, items: List<ShelfItem>): ShelfItem = items[(cursors[packageName] ?: 0) % items.size]
+
+    fun advance(packageName: String) {
+        cursors[packageName] = (cursors[packageName] ?: 0) + 1
     }
 
     suspend fun backdrop(url: String): ImageBitmap? {
@@ -103,10 +123,10 @@ object Tmdb {
         }
     }
 
-    private fun discover(kind: String, providerId: Int, region: String): List<ShelfItem> {
+    private fun discover(kind: String, providerId: Int, region: String, page: Int): List<ShelfItem> {
         val results = fetchJson(
             "$API/discover/$kind?watch_region=$region&with_watch_providers=$providerId" +
-                "&sort_by=popularity.desc&include_adult=false&language=en-US&page=1",
+                "&sort_by=popularity.desc&include_adult=false&language=en-US&page=$page",
         ).getJSONArray("results")
         val movie = kind == "movie"
         return (0 until results.length()).map { results.getJSONObject(it) }
