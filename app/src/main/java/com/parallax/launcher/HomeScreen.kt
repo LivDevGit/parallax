@@ -2,6 +2,7 @@ package com.parallax.launcher
 
 import android.text.format.DateFormat
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -10,6 +11,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -24,6 +26,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -44,6 +47,8 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -57,6 +62,7 @@ private val TileWidth = 160.dp
 private val RowHeight = 170.dp
 // Matches the window background in res/values/colors.xml; the Top Shelf overlay fades into it.
 private val PageColor = Color(0xFF0A0A0E)
+private const val IdleTimeoutMillis = 5_000L
 
 @Composable
 fun HomeScreen(
@@ -75,6 +81,24 @@ fun HomeScreen(
     // The app being rearranged, if any. While set, the D-pad moves it instead of moving focus.
     var movingId by remember { mutableStateOf<String?>(null) }
 
+    // The home screen rests with the apps hidden and widgets showing. Any key brings the apps back,
+    // and they tuck away again after a few seconds without input.
+    var appsShown by remember { mutableStateOf(false) }
+    var lastInput by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(appsShown, lastInput, movingId) {
+        if (appsShown && movingId == null) {
+            delay(IdleTimeoutMillis)
+            appsShown = false
+        }
+    }
+    val reveal by animateFloatAsState(if (appsShown) 1f else 0f, tween(450), label = "reveal")
+
+    // The blurred version of whatever the Top Shelf shows, for the glass widgets to show through.
+    var glass by remember { mutableStateOf<ImageBitmap?>(null) }
+    val now by rememberNow()
+    val weather by rememberWeather()
+    val match by rememberBarcelonaMatch()
+
     // Fetch every service's titles and its next backdrops up front, so the Top Shelf switches instantly.
     LaunchedEffect(apps.map { it.id }) {
         for (app in apps) {
@@ -87,6 +111,7 @@ fun HomeScreen(
     // Home/Back while already home: jump back to the first app.
     LaunchedEffect(homePresses, apps.isNotEmpty()) {
         if (apps.isEmpty() || movingId != null) return@LaunchedEffect
+        appsShown = false
         rowState.animateScrollToItem(0)
         runCatching { firstTile.requestFocus() }
     }
@@ -95,6 +120,12 @@ fun HomeScreen(
         Modifier
             .fillMaxSize()
             .onPreviewKeyEvent { event ->
+                if (event.type == KeyEventType.KeyDown) lastInput = event.nativeKeyEvent.eventTime
+                if (!appsShown) {
+                    // The first press only wakes the apps up, so it can't launch or move anything by accident.
+                    if (event.type == KeyEventType.KeyDown) appsShown = true
+                    return@onPreviewKeyEvent true
+                }
                 val moving = movingId
                 if (moving == null) {
                     if (event.type == KeyEventType.KeyDown) {
@@ -127,7 +158,8 @@ fun HomeScreen(
             },
     ) {
         val shelfApp = apps.getOrNull(focusedIndex.coerceAtMost(apps.lastIndex))
-        TopShelf(app = shelfApp, modifier = Modifier.fillMaxSize())
+        TopShelf(app = shelfApp, onGlass = { glass = it }, textAlpha = { reveal }, modifier = Modifier.fillMaxSize())
+        val screen = with(LocalDensity.current) { IntSize(maxWidth.roundToPx(), maxHeight.roundToPx()) }
 
         LazyRow(
             state = rowState,
@@ -138,7 +170,12 @@ fun HomeScreen(
                 .align(Alignment.BottomStart)
                 .padding(bottom = 36.dp)
                 .fillMaxWidth()
-                .height(RowHeight),
+                .height(RowHeight)
+                .graphicsLayer {
+                    alpha = reveal
+                    translationY = (1f - reveal) * 60.dp.toPx()
+                    compositingStrategy = CompositingStrategy.ModulateAlpha
+                },
         ) {
             itemsIndexed(apps, key = { _, app -> app.id }) { index, app ->
                 AppTile(
@@ -156,6 +193,21 @@ fun HomeScreen(
             }
         }
 
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(24.dp),
+            verticalAlignment = Alignment.Bottom,
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(start = 72.dp, bottom = 48.dp)
+                .graphicsLayer {
+                    alpha = 1f - reveal
+                    compositingStrategy = CompositingStrategy.ModulateAlpha
+                },
+        ) {
+            ClockWidget(now, weather, glass, screen, Modifier.width(300.dp).height(156.dp))
+            BarcelonaWidget(match, glass, screen, Modifier.width(400.dp).height(156.dp))
+        }
+
         Column(
             Modifier.align(Alignment.TopStart).padding(top = 36.dp, start = 72.dp),
         ) {
@@ -168,12 +220,16 @@ fun HomeScreen(
                 Greeting(userName)
             }
         }
+        // The compact clock gives way to the clock widget while the apps are hidden.
         Column(
-            Modifier.align(Alignment.TopEnd).padding(top = 28.dp, end = 56.dp),
+            Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = 28.dp, end = 56.dp)
+                .graphicsLayer { alpha = reveal; compositingStrategy = CompositingStrategy.ModulateAlpha },
             horizontalAlignment = Alignment.End,
         ) {
-            Clock()
-            WeatherLine()
+            Clock(now)
+            weather?.let { WeatherLine(it) }
         }
     }
 }
@@ -191,12 +247,28 @@ private sealed interface ShelfContent {
     data class Ambient(val app: AppInfo) : ShelfContent
 
     /** A popular show or film from the focused streaming service. */
-    data class Feature(val app: AppInfo, val item: ShelfItem, val image: ImageBitmap) : ShelfContent
+    data class Feature(val app: AppInfo, val item: ShelfItem, val backdrop: Backdrop) : ShelfContent
 }
 
 @Composable
-private fun TopShelf(app: AppInfo?, modifier: Modifier = Modifier) {
+private fun TopShelf(
+    app: AppInfo?,
+    onGlass: (ImageBitmap?) -> Unit,
+    // The app name and title describe the focused app, so they only show while the apps do.
+    textAlpha: () -> Float,
+    modifier: Modifier = Modifier,
+) {
     var content by remember { mutableStateOf<ShelfContent?>(null) }
+
+    LaunchedEffect(content) {
+        onGlass(
+            when (val shown = content) {
+                is ShelfContent.Ambient -> shown.app.backdrop
+                is ShelfContent.Feature -> shown.backdrop.blurred
+                null -> null
+            },
+        )
+    }
 
     LaunchedEffect(app?.id) {
         if (app == null) return@LaunchedEffect
@@ -251,7 +323,7 @@ private fun TopShelf(app: AppInfo?, modifier: Modifier = Modifier) {
                     )
                 }
                 is ShelfContent.Feature -> Image(
-                    bitmap = shown.image,
+                    bitmap = shown.backdrop.image,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
@@ -265,12 +337,14 @@ private fun TopShelf(app: AppInfo?, modifier: Modifier = Modifier) {
             contentScale = ContentScale.FillBounds,
             modifier = Modifier.fillMaxSize(),
         )
+        Box(Modifier.graphicsLayer { alpha = textAlpha(); compositingStrategy = CompositingStrategy.ModulateAlpha }) {
         LightCrossfade(content) { shown ->
             when (shown) {
                 is ShelfContent.Ambient -> AmbientText(shown.app)
                 is ShelfContent.Feature -> FeatureText(shown)
                 null -> Unit
             }
+        }
         }
     }
 }
@@ -377,16 +451,7 @@ private fun Greeting(name: String?) {
 }
 
 @Composable
-private fun WeatherLine() {
-    var weather by remember { mutableStateOf<WeatherInfo?>(null) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            Weather.load()?.let { weather = it }
-            // Retry soon if the network wasn't up yet, otherwise refresh every half hour.
-            delay(if (weather == null) 60_000 else 30 * 60_000)
-        }
-    }
-    val w = weather ?: return
+private fun WeatherLine(w: WeatherInfo) {
     BasicText(
         text = "${w.symbol}  ${w.temperature}°  ·  ${w.high}° / ${w.low}°  ·  ${w.city}",
         style = TextStyle(color = Color.White.copy(alpha = 0.8f), fontSize = 15.sp),
@@ -395,18 +460,11 @@ private fun WeatherLine() {
 }
 
 @Composable
-private fun Clock(modifier: Modifier = Modifier) {
+private fun Clock(now: Date, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val format = remember { DateFormat.getTimeFormat(context) }
-    var now by remember { mutableStateOf(format.format(Date())) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            now = format.format(Date())
-            delay(15_000)
-        }
-    }
     BasicText(
-        text = now,
+        text = format.format(now),
         style = TextStyle(color = Color.White, fontSize = 38.sp, fontWeight = FontWeight.Medium),
         modifier = modifier,
     )
