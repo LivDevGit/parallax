@@ -1,0 +1,4 @@
+<resources>
+    <!-- Matches BackgroundBottom in HomeScreen.kt; the window draws it, so Compose doesn't need its own background. -->
+    <color name="background">#FF0A0A0E</color>
+</resources>

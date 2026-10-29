@@ -59,7 +59,8 @@ object Tmdb {
     private val loadedAt = mutableMapOf<String, Long>()
     // Where each service's rotation is up to, so coming back to an app shows the next title rather than the first.
     private val cursors = mutableMapOf<String, Int>()
-    private val backdrops = LruCache<String, ImageBitmap>(10)
+    // Room for the current and next backdrop of every service (~1.8 MB each at 1280x720 RGB_565).
+    private val backdrops = LruCache<String, ImageBitmap>(16)
 
     fun supports(packageName: String): Boolean = token.isNotBlank() && packageName in providersByPackage
 
@@ -88,6 +89,16 @@ object Tmdb {
         }
     }
 
+    fun cachedItems(packageName: String): List<ShelfItem>? = itemsByPackage[packageName]
+
+    fun cachedBackdrop(url: String): ImageBitmap? = backdrops.get(url)
+
+    /** Downloads the backdrops this service will show next, so focusing it is instant. */
+    suspend fun preload(packageName: String, items: List<ShelfItem>) {
+        val cursor = cursors[packageName] ?: 0
+        for (offset in 0..1) backdrop(items[(cursor + offset) % items.size].backdropUrl)
+    }
+
     /** The title this service's Top Shelf should show next. */
     fun current(packageName: String, items: List<ShelfItem>): ShelfItem = items[(cursors[packageName] ?: 0) % items.size]
 
@@ -105,7 +116,10 @@ object Tmdb {
                 try {
                     // RGB_565 halves memory; backdrops have no transparency and sit under a gradient anyway.
                     val options = BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.RGB_565 }
-                    BitmapFactory.decodeStream(connection.inputStream, null, options)?.asImageBitmap()
+                    BitmapFactory.decodeStream(connection.inputStream, null, options)
+                        // Upload to the GPU in the background now, rather than mid-animation on first draw.
+                        ?.also { it.prepareToDraw() }
+                        ?.asImageBitmap()
                 } finally {
                     connection.disconnect()
                 }

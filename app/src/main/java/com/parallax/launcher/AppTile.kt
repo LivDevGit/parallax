@@ -36,6 +36,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.TextStyle
@@ -129,83 +130,100 @@ fun AppTile(
             .bringIntoViewRequester(bringIntoView),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .aspectRatio(16f / 9f)
-                .onFocusChanged {
-                    focused = it.isFocused
-                    if (it.isFocused) onFocused()
-                }
-                .graphicsLayer {
-                    scaleX = scale
-                    scaleY = scale
-                    rotationX = tiltX.value
-                    rotationY = tiltY.value
-                    rotationZ = wiggle.value
-                    cameraDistance = 12f * density
-                    shadowElevation = if (focused) 28.dp.toPx() else 0f
-                    shape = TileShape
-                    clip = true
-                }
-                .onKeyEvent { event ->
-                    if (event.key !in SelectKeys) return@onKeyEvent false
-                    val repeat = event.nativeKeyEvent.repeatCount
-                    when {
-                        // Holding a remote button sends repeated key-downs; the first repeat means "long press".
-                        event.type == KeyEventType.KeyDown && repeat == 0 -> {
-                            pressed = true
-                            longPressed = false
-                        }
-                        event.type == KeyEventType.KeyDown && !longPressed -> {
-                            longPressed = true
-                            pressed = false
-                            onLongClick()
-                        }
-                        event.type == KeyEventType.KeyUp -> {
-                            if (pressed && !longPressed) onClick()
-                            pressed = false
-                        }
+        Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f)) {
+            // A baked shadow bitmap rather than shadowElevation: real shadows are re-rendered every frame while
+            // the tile scales and tilts, which this TV's GPU can't keep up with.
+            Image(
+                bitmap = Precomputed.tileShadow,
+                contentDescription = null,
+                contentScale = ContentScale.FillBounds,
+                modifier = Modifier
+                    .matchParentSize()
+                    .graphicsLayer {
+                        val lift = ((scale - 1f) / 0.15f).coerceIn(0f, 1f)
+                        alpha = lift
+                        compositingStrategy = CompositingStrategy.ModulateAlpha
+                        scaleX = scale * 1.46f
+                        scaleY = scale * 1.73f
+                        translationY = size.height * 0.12f * lift
+                    },
+            )
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .onFocusChanged {
+                        focused = it.isFocused
+                        if (it.isFocused) onFocused()
                     }
-                    true
-                }
-                .focusable()
-                .background(Color(0xFF2C2C34))
-                .drawWithContent {
-                    drawContent()
-                    if (focused) {
-                        // Specular sheen that slides with the tilt, like light catching glass.
-                        val shift = 0.5f + tiltY.value / 18f
-                        val cx = size.width * shift
-                        drawRect(
-                            brush = Brush.linearGradient(
-                                colors = listOf(Color.Transparent, Color.White.copy(alpha = 0.22f), Color.Transparent),
-                                start = Offset(cx - size.width * 0.6f, 0f),
-                                end = Offset(cx + size.width * 0.6f, size.height),
-                            ),
-                        )
-                        drawRect(
-                            brush = Brush.verticalGradient(
-                                0f to Color.White.copy(alpha = 0.12f),
-                                0.4f to Color.Transparent,
-                            ),
-                        )
+                    .graphicsLayer {
+                        scaleX = scale
+                        scaleY = scale
+                        rotationX = tiltX.value
+                        rotationY = tiltY.value
+                        rotationZ = wiggle.value
+                        cameraDistance = 12f * density
+                        shape = TileShape
+                        clip = true
                     }
-                },
-            contentAlignment = Alignment.Center,
-        ) {
-            when {
-                app.banner != null -> Image(
-                    bitmap = app.banner,
-                    contentDescription = app.label,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                )
-                app.icon != null -> Image(
-                    bitmap = app.icon,
-                    contentDescription = app.label,
-                    modifier = Modifier.fillMaxHeight(0.55f).aspectRatio(1f),
-                )
+                    .onKeyEvent { event ->
+                        if (event.key !in SelectKeys) return@onKeyEvent false
+                        val repeat = event.nativeKeyEvent.repeatCount
+                        when {
+                            // Holding a remote button sends repeated key-downs; the first repeat means "long press".
+                            event.type == KeyEventType.KeyDown && repeat == 0 -> {
+                                pressed = true
+                                longPressed = false
+                            }
+                            event.type == KeyEventType.KeyDown && !longPressed -> {
+                                longPressed = true
+                                pressed = false
+                                onLongClick()
+                            }
+                            event.type == KeyEventType.KeyUp -> {
+                                if (pressed && !longPressed) onClick()
+                                pressed = false
+                            }
+                        }
+                        true
+                    }
+                    .focusable()
+                    .background(Color(0xFF2C2C34))
+                    .drawWithContent {
+                        drawContent()
+                        if (focused) {
+                            // Specular sheen that slides with the tilt, like light catching glass.
+                            val shift = 0.5f + tiltY.value / 18f
+                            val cx = size.width * shift
+                            drawRect(
+                                brush = Brush.linearGradient(
+                                    colors = listOf(Color.Transparent, Color.White.copy(alpha = 0.22f), Color.Transparent),
+                                    start = Offset(cx - size.width * 0.6f, 0f),
+                                    end = Offset(cx + size.width * 0.6f, size.height),
+                                ),
+                            )
+                            drawRect(
+                                brush = Brush.verticalGradient(
+                                    0f to Color.White.copy(alpha = 0.12f),
+                                    0.4f to Color.Transparent,
+                                ),
+                            )
+                        }
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                when {
+                    app.banner != null -> Image(
+                        bitmap = app.banner,
+                        contentDescription = app.label,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                    app.icon != null -> Image(
+                        bitmap = app.icon,
+                        contentDescription = app.label,
+                        modifier = Modifier.fillMaxHeight(0.55f).aspectRatio(1f),
+                    )
+                }
             }
         }
 
@@ -224,7 +242,7 @@ fun AppTile(
             ),
             modifier = Modifier
                 .fillMaxWidth()
-                .graphicsLayer { alpha = labelAlpha },
+                .graphicsLayer { alpha = labelAlpha; compositingStrategy = CompositingStrategy.ModulateAlpha },
         )
     }
 }
