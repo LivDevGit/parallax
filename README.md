@@ -19,6 +19,8 @@ Early work in progress. Today it has:
 
 Planned: folders, Control Center, screensaver, layered icon packs, a settings screen.
 
+See [docs/benchmarks.md](docs/benchmarks.md) for start-up, memory and frame-time measurements against the Google TV launcher.
+
 ### Setting the greeting name
 
 ```bash
