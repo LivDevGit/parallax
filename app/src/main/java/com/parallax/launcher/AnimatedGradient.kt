@@ -48,22 +48,32 @@ class AnimatedGradient {
         Blob(0x5A / 255f, 0x14 / 255f, 0x30 / 255f, 0.55f, 0.15f, 0.85f, 0.18f, 0.22f, 59f, 37f), // wine
     )
 
+    // Per-render blob positions, so the pixel loop does no trig and allocates nothing.
+    private val blobX = FloatArray(blobs.size)
+    private val blobY = FloatArray(blobs.size)
+    private val blobInvR2 = FloatArray(blobs.size) { 1f / (blobs[it].radius * blobs[it].radius) }
+
     fun render(seconds: Float) {
         val aspect = WIDTH.toFloat() / HEIGHT
+        for (i in blobs.indices) {
+            val blob = blobs[i]
+            blobX[i] = (blob.cx + blob.ax * sin(seconds * TWO_PI / blob.periodX)) * aspect
+            blobY[i] = blob.cy + blob.ay * cos(seconds * TWO_PI / blob.periodY)
+        }
         for (y in 0 until HEIGHT) {
             val fy = y / (HEIGHT - 1f)
             for (x in 0 until WIDTH) {
-                val fx = x / (WIDTH - 1f)
+                val fx = x / (WIDTH - 1f) * aspect
                 var r = BASE_R
                 var g = BASE_G
                 var b = BASE_B
-                for (blob in blobs) {
-                    val bx = blob.cx + blob.ax * sin(seconds * TWO_PI / blob.periodX)
-                    val by = blob.cy + blob.ay * cos(seconds * TWO_PI / blob.periodY)
-                    val dx = (fx - bx) * aspect
-                    val dy = fy - by
-                    val falloff = (1f - (dx * dx + dy * dy) / (blob.radius * blob.radius)).coerceAtLeast(0f)
+                for (i in blobs.indices) {
+                    val dx = fx - blobX[i]
+                    val dy = fy - blobY[i]
+                    val falloff = (1f - (dx * dx + dy * dy) * blobInvR2[i]).coerceAtLeast(0f)
+                    if (falloff == 0f) continue
                     val weight = falloff * falloff
+                    val blob = blobs[i]
                     r += blob.r * weight
                     g += blob.g * weight
                     b += blob.b * weight
@@ -100,9 +110,10 @@ fun rememberAnimatedGradient(running: Boolean): AnimatedGradient {
         if (!running) return@LaunchedEffect
         val start = System.nanoTime()
         while (true) {
-            // Twenty updates a second is plenty for motion this slow. Waiting for a frame also pauses
-            // the loop entirely while another app is in front, since no frames are drawn then.
-            delay(50)
+            // Ten updates a second is plenty for motion this slow: each step shifts a colour by about one
+            // level in 255. Waiting for a frame also pauses the loop entirely while another app is in front,
+            // since no frames are drawn then.
+            delay(100)
             withFrameNanos { }
             val seconds = (System.nanoTime() - start) / 1e9f
             withContext(Dispatchers.Default) { gradient.render(seconds) }
